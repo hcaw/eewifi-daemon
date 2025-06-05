@@ -1,19 +1,19 @@
 #
-# btwifi-daemon.config.example
+# wifi-daemon.config.example
 #
-# Edit this file then save as btwifi-daemon.config
+# Edit this file then save as wifi-daemon.config
 # If using Git add this to your .gitignore file:
-# 	'$ echo btwifi-daemon.config >> .gitignore'
+#     '$ echo wifi-daemon.config >> .gitignore'
 
-# login details for BTWiFi
-USERNAME="person"
-PASSWORD="password"
+# login details for EE WiFi
+USERNAME=""
+PASSWORD=""
 
 # set to true for chatty output :)
 DEBUG=false
 
-# find out with iwconfig
-INTERFACE=wlan0
+# find out with iwinfo
+INTERFACE=wlan-sta0
 
 # delays
 DELAY_INTERFACE=2       # number of seconds to see if the interface is up / connected to the access point (default 2)
@@ -22,4 +22,4 @@ DELAY_SUCCESS=60        # when things are going well, slow down (default 60)
 WGET_TIMEOUT=5          # number of seconds to wait for server response (default 5)
 
 # fairly static variable, don't touch
-SERVER="https://www.btwifi.com:8443"
+SERVER="https://ee-wifi.ee.co.uk"
