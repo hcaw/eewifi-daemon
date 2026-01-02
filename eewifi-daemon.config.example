@@ -1,25 +1,22 @@
 #
-# wifi-daemon.config.example
+# eewifi-daemon.config.example
 #
-# Edit this file then save as wifi-daemon.config
-# If using Git add this to your .gitignore file:
-#     '$ echo wifi-daemon.config >> .gitignore'
+# Copy this file to /jffs/eewifi-daemon.config on your router
+# The actual config with credentials is excluded from git via .gitignore
+#
 
-# login details for EE WiFi
-USERNAME=""
-PASSWORD=""
+# EE WiFi login credentials
+USERNAME="your-email@example.com"
+PASSWORD="your-password"
 
-# set to true for chatty output :)
+# Debug mode - set to true for verbose output
 DEBUG=false
 
-# find out with iwinfo
-INTERFACE=wlan-sta0
+# Timing configuration (in seconds)
+DELAY_INTERFACE=2       # Delay between SSID checks when not on EE WiFi
+DELAY_LOGIN_ATTEMPTS=5  # Delay between failed login retries
+DELAY_SUCCESS=60        # Delay between checks when logged in successfully
+WGET_TIMEOUT=5          # HTTP request timeout
 
-# delays
-DELAY_INTERFACE=2       # number of seconds to see if the interface is up / connected to the access point (default 2)
-DELAY_LOGIN_ATTEMPTS=5  # additional delay between login attempts (default 5)
-DELAY_SUCCESS=60        # when things are going well, slow down (default 60)
-WGET_TIMEOUT=5          # number of seconds to wait for server response (default 5)
-
-# fairly static variable, don't touch
+# EE WiFi server (should not need changing)
 SERVER="https://ee-wifi.ee.co.uk"
