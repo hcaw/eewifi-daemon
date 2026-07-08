@@ -5,8 +5,8 @@
 #
 # Usage:
 #   /jffs/reconnect-wifi.sh          # Try all methods
-#   /jffs/reconnect-wifi.sh quick    # Just restart daemon
 #   /jffs/reconnect-wifi.sh radio    # Restart radio only
+#   /jffs/reconnect-wifi.sh dhcp     # Renew DHCP lease only
 #   /jffs/reconnect-wifi.sh wan      # Restart full WAN
 #
 
@@ -21,44 +21,27 @@ log_msg() {
     fi
 }
 
-# Method 1: Restart daemon only (least disruptive)
-restart_daemon() {
-    log_msg "Method 1: Restarting eewifi-daemon..."
-    /jffs/eewifi-service.sh restart
-    sleep 3
-    if /jffs/eewifi-service.sh status | grep -q "RUNNING"; then
-        log_msg "✓ Daemon restarted successfully"
-        return 0
-    else
-        log_msg "✗ Daemon restart failed"
-        return 1
-    fi
-}
+# The network we're actually configured to join - read from nvram rather than
+# hardcoding, so this script keeps working if the target network changes
+TARGET_SSID=$(nvram get wl0_ssid 2>/dev/null)
 
-# Method 2: Force wireless reassociation (moderate)
+# Method 1: Force wireless reassociation (least disruptive)
 reassociate_wireless() {
-    log_msg "Method 2: Forcing wireless reassociation..."
+    log_msg "Method 1: Forcing wireless reassociation..."
 
-    # Get current SSID to reconnect to
-    SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
-
-    if [ -z "$SSID" ]; then
-        log_msg "Warning: Not currently connected to any SSID"
-        SSID="EE WiFi"
-    fi
-
-    log_msg "Disconnecting from '$SSID'..."
+    CURRENT_SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
+    log_msg "Disconnecting from '${CURRENT_SSID:-none}'..."
     wl -i eth1 disassoc
     sleep 2
 
-    log_msg "Scanning for '$SSID'..."
+    log_msg "Scanning for '$TARGET_SSID'..."
     wl -i eth1 scan
     sleep 3
 
     log_msg "Checking if reconnected..."
     NEW_SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
 
-    if [ "$NEW_SSID" = "EE WiFi" ]; then
+    if [ "$NEW_SSID" = "$TARGET_SSID" ]; then
         log_msg "✓ Successfully reconnected to '$NEW_SSID'"
         return 0
     else
@@ -67,12 +50,9 @@ reassociate_wireless() {
     fi
 }
 
-# Method 3: Restart wireless interface (more disruptive)
+# Method 2: Restart wireless interface (more disruptive)
 restart_wireless() {
-    log_msg "Method 3: Restarting wireless interface (eth1)..."
-
-    # Save current settings
-    SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
+    log_msg "Method 2: Restarting wireless interface (eth1)..."
 
     # Disable and re-enable wireless
     log_msg "Bringing down eth1..."
@@ -90,7 +70,7 @@ restart_wireless() {
 
     NEW_SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
 
-    if [ "$NEW_SSID" = "EE WiFi" ]; then
+    if [ "$NEW_SSID" = "$TARGET_SSID" ]; then
         log_msg "✓ Wireless interface restarted, connected to '$NEW_SSID'"
         return 0
     else
@@ -99,12 +79,19 @@ restart_wireless() {
     fi
 }
 
-# Method 4: Renew DHCP (for IP issues)
+# Method 3: Renew DHCP (for IP issues) - only meaningful if actually associated
 renew_dhcp() {
-    log_msg "Method 4: Renewing DHCP lease..."
+    log_msg "Method 3: Renewing DHCP lease..."
 
-    # Find udhcpc process for eth1
-    UDHCPC_PID=$(ps | grep 'udhcpc.*eth1' | grep -v grep | awk '{print $1}')
+    CURRENT_SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
+    if [ "$CURRENT_SSID" != "$TARGET_SSID" ]; then
+        log_msg "✗ Not associated to '$TARGET_SSID' (current: ${CURRENT_SSID:-none}) - DHCP renewal skipped"
+        return 1
+    fi
+
+    # Most recent udhcpc process for eth1 - there can be stale leftovers from
+    # earlier restarts, so take the last one rather than assuming a single match
+    UDHCPC_PID=$(ps | grep 'udhcpc.*eth1' | grep -v grep | awk '{print $1}' | tail -1)
 
     if [ -n "$UDHCPC_PID" ]; then
         log_msg "Sending SIGUSR1 to udhcpc (PID: $UDHCPC_PID) to renew lease..."
@@ -129,17 +116,19 @@ renew_dhcp() {
     fi
 }
 
-# Method 5: Full WAN restart (most disruptive, like mwan watchdog would do)
+# Method 4: Full WAN restart (most disruptive, but reliably works)
 restart_wan() {
-    log_msg "Method 5: Restarting WAN service (most disruptive)..."
+    log_msg "Method 4: Restarting WAN service (most disruptive)..."
     log_msg "This will disconnect all clients briefly!"
 
+    service wireless restart
+    sleep 5
     service wan restart
     sleep 10
 
     SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
 
-    if [ "$SSID" = "EE WiFi" ]; then
+    if [ "$SSID" = "$TARGET_SSID" ]; then
         log_msg "✓ WAN restarted, connected to '$SSID'"
         return 0
     else
@@ -155,20 +144,10 @@ show_status() {
     echo ""
     echo "=== IP Address ==="
     ifconfig eth1 | grep 'inet addr' || ip addr show eth1 | grep 'inet '
-    echo ""
-    echo "=== Daemon Status ==="
-    /jffs/eewifi-service.sh daemon
-    echo ""
-    echo "=== Portal Login Status ==="
-    /jffs/eewifi-service.sh status
 }
 
 # Main logic
 case "${1:-all}" in
-    quick)
-        log_msg "=== Quick reconnect: daemon restart only ==="
-        restart_daemon
-        ;;
     radio)
         log_msg "=== Radio reconnect: reassociate only ==="
         reassociate_wireless
@@ -193,16 +172,7 @@ case "${1:-all}" in
         echo ""
 
         # Try methods in order of least to most disruptive
-        if restart_daemon; then
-            log_msg ""
-            log_msg "✓✓✓ Reconnected successfully (daemon restart)"
-            exit 0
-        fi
-
-        sleep 2
-
         if reassociate_wireless; then
-            restart_daemon
             log_msg ""
             log_msg "✓✓✓ Reconnected successfully (wireless reassociation)"
             exit 0
@@ -211,7 +181,6 @@ case "${1:-all}" in
         sleep 2
 
         if renew_dhcp; then
-            restart_daemon
             log_msg ""
             log_msg "✓✓✓ Reconnected successfully (DHCP renewal)"
             exit 0
@@ -221,7 +190,6 @@ case "${1:-all}" in
 
         if restart_wireless; then
             renew_dhcp
-            restart_daemon
             log_msg ""
             log_msg "✓✓✓ Reconnected successfully (wireless interface restart)"
             exit 0
@@ -230,7 +198,6 @@ case "${1:-all}" in
         sleep 5
 
         if restart_wan; then
-            restart_daemon
             log_msg ""
             log_msg "✓✓✓ Reconnected successfully (WAN restart)"
             exit 0
