@@ -10,7 +10,7 @@
 STATE_FILE="/var/run/wireless-monitor.state"
 LOGGER="/usr/bin/logger"
 LOG_TAG="wireless-monitor"
-WL_IFACE="eth1"  # 2.4GHz wireless client interface
+WL_IFACE="eth2"  # 5GHz wireless client (uplink) interface
 
 # Logging function
 log_msg() {

@@ -13,6 +13,10 @@
 LOGGER="/usr/bin/logger"
 LOG_TAG="wifi-reconnect"
 
+# The wireless client (uplink) interface - wl1/eth2 (5GHz) in the current
+# repeater-bridge layout. wl0/eth1 (2.4GHz) is the downstream AP instead.
+WL_IFACE="eth2"
+
 log_msg() {
     msg="$1"
     echo "$msg"
@@ -23,23 +27,23 @@ log_msg() {
 
 # The network we're actually configured to join - read from nvram rather than
 # hardcoding, so this script keeps working if the target network changes
-TARGET_SSID=$(nvram get wl0_ssid 2>/dev/null)
+TARGET_SSID=$(nvram get wl1_ssid 2>/dev/null)
 
 # Method 1: Force wireless reassociation (least disruptive)
 reassociate_wireless() {
     log_msg "Method 1: Forcing wireless reassociation..."
 
-    CURRENT_SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
+    CURRENT_SSID=$(wl -i $WL_IFACE status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
     log_msg "Disconnecting from '${CURRENT_SSID:-none}'..."
-    wl -i eth1 disassoc
+    wl -i $WL_IFACE disassoc
     sleep 2
 
     log_msg "Scanning for '$TARGET_SSID'..."
-    wl -i eth1 scan
+    wl -i $WL_IFACE scan
     sleep 3
 
     log_msg "Checking if reconnected..."
-    NEW_SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
+    NEW_SSID=$(wl -i $WL_IFACE status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
 
     if [ "$NEW_SSID" = "$TARGET_SSID" ]; then
         log_msg "✓ Successfully reconnected to '$NEW_SSID'"
@@ -52,15 +56,15 @@ reassociate_wireless() {
 
 # Method 2: Restart wireless interface (more disruptive)
 restart_wireless() {
-    log_msg "Method 2: Restarting wireless interface (eth1)..."
+    log_msg "Method 2: Restarting wireless interface ($WL_IFACE)..."
 
     # Disable and re-enable wireless
-    log_msg "Bringing down eth1..."
-    ifconfig eth1 down
+    log_msg "Bringing down $WL_IFACE..."
+    ifconfig $WL_IFACE down
     sleep 2
 
-    log_msg "Bringing up eth1..."
-    ifconfig eth1 up
+    log_msg "Bringing up $WL_IFACE..."
+    ifconfig $WL_IFACE up
     sleep 3
 
     # Trigger radio join to reconnect
@@ -68,7 +72,7 @@ restart_wireless() {
     radio join
     sleep 5
 
-    NEW_SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
+    NEW_SSID=$(wl -i $WL_IFACE status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
 
     if [ "$NEW_SSID" = "$TARGET_SSID" ]; then
         log_msg "✓ Wireless interface restarted, connected to '$NEW_SSID'"
@@ -83,24 +87,24 @@ restart_wireless() {
 renew_dhcp() {
     log_msg "Method 3: Renewing DHCP lease..."
 
-    CURRENT_SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
+    CURRENT_SSID=$(wl -i $WL_IFACE status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
     if [ "$CURRENT_SSID" != "$TARGET_SSID" ]; then
         log_msg "✗ Not associated to '$TARGET_SSID' (current: ${CURRENT_SSID:-none}) - DHCP renewal skipped"
         return 1
     fi
 
-    # Most recent udhcpc process for eth1 - there can be stale leftovers from
+    # Most recent udhcpc process for $WL_IFACE - there can be stale leftovers from
     # earlier restarts, so take the last one rather than assuming a single match
-    UDHCPC_PID=$(ps | grep 'udhcpc.*eth1' | grep -v grep | awk '{print $1}' | tail -1)
+    UDHCPC_PID=$(ps | grep "udhcpc.*$WL_IFACE" | grep -v grep | awk '{print $1}' | tail -1)
 
     if [ -n "$UDHCPC_PID" ]; then
         log_msg "Sending SIGUSR1 to udhcpc (PID: $UDHCPC_PID) to renew lease..."
         kill -USR1 "$UDHCPC_PID"
         sleep 3
 
-        IP=$(ifconfig eth1 | grep 'inet addr' | awk '{print $2}' | cut -d: -f2)
+        IP=$(ifconfig $WL_IFACE | grep 'inet addr' | awk '{print $2}' | cut -d: -f2)
         if [ -z "$IP" ]; then
-            IP=$(ip addr show eth1 | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
+            IP=$(ip addr show $WL_IFACE | grep 'inet ' | awk '{print $2}' | cut -d/ -f1)
         fi
 
         if [ -n "$IP" ]; then
@@ -111,28 +115,27 @@ renew_dhcp() {
             return 1
         fi
     else
-        log_msg "✗ udhcpc not running for eth1"
+        log_msg "✗ udhcpc not running for $WL_IFACE"
         return 1
     fi
 }
 
-# Method 4: Full WAN restart (most disruptive, but reliably works)
+# Method 4: Full wireless subsystem restart (most disruptive - drops the
+# downstream AP briefly too, since it's the same wireless subsystem)
 restart_wan() {
-    log_msg "Method 4: Restarting WAN service (most disruptive)..."
+    log_msg "Method 4: Restarting wireless subsystem (most disruptive)..."
     log_msg "This will disconnect all clients briefly!"
 
     service wireless restart
-    sleep 5
-    service wan restart
     sleep 10
 
-    SSID=$(wl -i eth1 status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
+    SSID=$(wl -i $WL_IFACE status 2>/dev/null | sed -n 's/^SSID: *"\(.*\)"/\1/p')
 
     if [ "$SSID" = "$TARGET_SSID" ]; then
-        log_msg "✓ WAN restarted, connected to '$SSID'"
+        log_msg "✓ Wireless subsystem restarted, connected to '$SSID'"
         return 0
     else
-        log_msg "✗ WAN restart failed (current SSID: ${SSID:-none})"
+        log_msg "✗ Wireless subsystem restart failed (current SSID: ${SSID:-none})"
         return 1
     fi
 }
@@ -140,10 +143,10 @@ restart_wan() {
 # Show current status
 show_status() {
     echo "=== Current Wireless Status ==="
-    wl -i eth1 status | head -5
+    wl -i $WL_IFACE status | head -5
     echo ""
     echo "=== IP Address ==="
-    ifconfig eth1 | grep 'inet addr' || ip addr show eth1 | grep 'inet '
+    ifconfig $WL_IFACE | grep 'inet addr' || ip addr show $WL_IFACE | grep 'inet '
 }
 
 # Main logic

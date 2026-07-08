@@ -1,7 +1,10 @@
 #!/bin/sh
 #
 # Uplink Watchdog for FreshTomato
-# Detects loss of the wireless WAN uplink (eth1) and triggers reconnect-wifi.sh
+# Detects loss of the wireless uplink bridge (wl1/eth2, WET mode) and
+# triggers reconnect-wifi.sh. There's no separate WAN interface anymore -
+# eth2 bridges straight into br0 - so connectivity is checked generally
+# rather than bound to a specific interface.
 #
 # Run via cron every minute:
 #   cru a uplink-watchdog "*/1 * * * * /jffs/uplink-watchdog.sh"
@@ -21,8 +24,8 @@ log_msg() {
 }
 
 check_uplink() {
-    ping -c 2 -W 2 -I eth1 1.1.1.1 >/dev/null 2>&1 && return 0
-    ping -c 2 -W 2 -I eth1 8.8.8.8 >/dev/null 2>&1 && return 0
+    ping -c 2 -W 2 1.1.1.1 >/dev/null 2>&1 && return 0
+    ping -c 2 -W 2 8.8.8.8 >/dev/null 2>&1 && return 0
     return 1
 }
 
