@@ -1,2 +1,12 @@
 eewifi-daemon.config
 .DS_Store
+
+# Local settings and secrets (router password)
+.env
+
+# Router snapshots contain credentials (WPA PSK) - never commit
+backups/
+
+# Captured logs are generated output, not source
+*.log
+logs/

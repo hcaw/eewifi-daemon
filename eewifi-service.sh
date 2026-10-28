@@ -9,12 +9,36 @@ CONFIG_FILE="/jffs/eewifi-daemon.config"
 DAEMON_SCRIPT="/jffs/eewifi-daemon.sh"
 PID_FILE="/var/run/eewifi-daemon.pid"
 
+# Logger configuration
+LOGGER="/usr/bin/logger"
+LOG_TAG="eewifi-service"
+
+# Logging function - sends to syslog and optionally prints to stdout
+# Usage: log_msg "message" [priority] [quiet]
+# Priority: info (default), warn, err
+# quiet: if set to "quiet", don't print to stdout
+log_msg() {
+    msg="$1"
+    priority="${2:-info}"
+    quiet="${3:-}"
+
+    # Log to syslog
+    if [ -x "$LOGGER" ]; then
+        "$LOGGER" -t "$LOG_TAG" -p "daemon.$priority" "$msg"
+    fi
+
+    # Also print to stdout unless quiet mode
+    if [ "$quiet" != "quiet" ]; then
+        echo "$msg"
+    fi
+}
+
 # Load config if available
 if [ -f "$CONFIG_FILE" ]; then
     . "$CONFIG_FILE"
 else
-    echo "Warning: Config file not found at $CONFIG_FILE"
-    echo "Some commands may not work without credentials."
+    log_msg "Warning: Config file not found at $CONFIG_FILE" "warn"
+    log_msg "Some commands may not work without credentials." "warn"
 fi
 
 # Default server if not in config
@@ -50,10 +74,10 @@ fetch_url() {
 check_status() {
     response=$(fetch_url "$SERVER/home")
     if printf "%s" "$response" | grep -q "You are now connected"; then
-        echo "Status: LOGGED IN"
+        log_msg "Status: LOGGED IN" "info"
         return 0
     else
-        echo "Status: NOT LOGGED IN"
+        log_msg "Status: NOT LOGGED IN" "info"
         return 1
     fi
 }
@@ -61,11 +85,11 @@ check_status() {
 # Perform login
 do_login() {
     if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
-        echo "Error: USERNAME and PASSWORD must be set in $CONFIG_FILE"
+        log_msg "Error: USERNAME and PASSWORD must be set in $CONFIG_FILE" "err"
         return 1
     fi
 
-    echo "Attempting login as $USERNAME..."
+    log_msg "Attempting manual login as $USERNAME" "info"
     postdata="inputUsername=$USERNAME&username=wam/$USERNAME&password=$PASSWORD&xhtmlLogon=$SERVER/ante"
 
     # Send login request (may fail with redirect error but still work)
@@ -75,25 +99,25 @@ do_login() {
     sleep 2
 
     if check_status >/dev/null 2>&1; then
-        echo "Login successful!"
+        log_msg "Login successful for user $USERNAME" "info"
         return 0
     else
-        echo "Login may have failed. Check status manually."
+        log_msg "Login may have failed. Check status manually." "warn"
         return 1
     fi
 }
 
 # Perform logout
 do_logout() {
-    echo "Logging out..."
+    log_msg "Logging out from EE WiFi" "info"
     fetch_url "$SERVER/accountLogoff/home?confirmed=true" >/dev/null 2>&1
     sleep 1
 
     if ! check_status >/dev/null 2>&1; then
-        echo "Logout successful!"
+        log_msg "Logout successful" "info"
         return 0
     else
-        echo "Logout may have failed. Check status manually."
+        log_msg "Logout may have failed. Check status manually." "warn"
         return 1
     fi
 }
@@ -103,7 +127,7 @@ daemon_start() {
     if [ -f "$PID_FILE" ]; then
         pid=$(cat "$PID_FILE")
         if [ -d "/proc/$pid" ]; then
-            echo "Daemon already running (PID: $pid)"
+            log_msg "Daemon already running (PID: $pid)" "warn"
             return 1
         else
             rm -f "$PID_FILE"
@@ -111,21 +135,21 @@ daemon_start() {
     fi
 
     if [ ! -x "$DAEMON_SCRIPT" ]; then
-        echo "Error: Daemon script not found or not executable: $DAEMON_SCRIPT"
+        log_msg "Error: Daemon script not found or not executable: $DAEMON_SCRIPT" "err"
         return 1
     fi
 
-    echo "Starting EE WiFi daemon..."
+    log_msg "Starting EE WiFi daemon" "info"
     $DAEMON_SCRIPT &
     daemon_pid=$!
     echo "$daemon_pid" > "$PID_FILE"
     sleep 1
 
     if [ -d "/proc/$daemon_pid" ]; then
-        echo "Daemon started (PID: $daemon_pid)"
+        log_msg "Daemon started successfully (PID: $daemon_pid)" "info"
         return 0
     else
-        echo "Failed to start daemon"
+        log_msg "Failed to start daemon" "err"
         rm -f "$PID_FILE"
         return 1
     fi
@@ -136,22 +160,22 @@ daemon_stop() {
     if [ -f "$PID_FILE" ]; then
         pid=$(cat "$PID_FILE")
         if [ -d "/proc/$pid" ]; then
-            echo "Stopping daemon (PID: $pid)..."
+            log_msg "Stopping daemon (PID: $pid)" "info"
             kill "$pid" 2>/dev/null
             sleep 2
             if [ -d "/proc/$pid" ]; then
                 kill -9 "$pid" 2>/dev/null
             fi
             rm -f "$PID_FILE"
-            echo "Daemon stopped"
+            log_msg "Daemon stopped successfully" "info"
             return 0
         else
-            echo "PID file exists but daemon not running"
+            log_msg "PID file exists but daemon not running, cleaning up" "warn"
             rm -f "$PID_FILE"
             return 1
         fi
     else
-        echo "Daemon not running (no PID file)"
+        log_msg "Daemon not running (no PID file)" "info"
         return 1
     fi
 }
@@ -161,14 +185,14 @@ daemon_status() {
     if [ -f "$PID_FILE" ]; then
         pid=$(cat "$PID_FILE")
         if [ -d "/proc/$pid" ]; then
-            echo "Daemon: RUNNING (PID: $pid)"
+            log_msg "Daemon: RUNNING (PID: $pid)" "info"
             return 0
         else
-            echo "Daemon: NOT RUNNING (stale PID file)"
+            log_msg "Daemon: NOT RUNNING (stale PID file)" "info"
             return 1
         fi
     else
-        echo "Daemon: NOT RUNNING"
+        log_msg "Daemon: NOT RUNNING" "info"
         return 1
     fi
 }
@@ -200,6 +224,7 @@ show_info() {
     if [ -n "$USERNAME" ]; then
         echo "User: $USERNAME"
     fi
+    log_msg "Service info requested" "info" "quiet"
 }
 
 # Usage
